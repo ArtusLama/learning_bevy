@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy_vector_shapes::prelude::*;
 
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
@@ -8,7 +9,23 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(FixedUpdate, update)
         .add_systems(Update, draw_lines)
+        .add_systems(FixedUpdate, (apply_accelerations, apply_velocity))
         .run();
+}
+
+#[derive(Resource)]
+struct GameController {
+    pause_physics: bool,
+    transform_multiplier: f32
+}
+
+impl Default for GameController {
+    fn default() -> Self {
+        Self {
+            pause_physics: false,
+            transform_multiplier: 0.001
+        }
+    }
 }
 
 
@@ -24,9 +41,23 @@ struct Anchor;
 #[derive(Component)]
 struct Object {
     mass: f32,
-    size: f32
+    size: f32,
+    velocity: Vec2
 }
 
+
+#[derive(Component)]
+struct Acceleration {
+    value: Vec2
+}
+
+impl Acceleration {
+    pub fn get_gravity() -> Self {
+        Self {
+            value: Vec2::new(0., -9.81)
+        }
+    }
+}
 
 
 fn setup(
@@ -35,6 +66,8 @@ fn setup(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     commands.spawn(Camera2d::default());
+
+    commands.insert_resource(GameController::default());
 
     let material = materials.add(ColorMaterial::from(Color::WHITE));
 
@@ -45,6 +78,7 @@ fn setup(
     let obj = Object {
         mass: 10.,
         size: 20.,
+        velocity: Vec2::ZERO
     };
     let obj_position = Transform::from_xyz(0., -50., 0.);
     let obj_mesh = meshes.add(Circle::new(15.));
@@ -61,8 +95,15 @@ fn setup(
         obj,
         obj_position,
         Mesh2d(obj_mesh),
-        MeshMaterial2d(material.clone())
-    )).observe(drag_obj_observer).id();
+        MeshMaterial2d(material.clone()),
+        Acceleration::get_gravity()
+    ))
+        .observe(obj_click_down_observer)
+        .observe(obj_click_up_observer)
+        .observe(drag_obj_observer)
+        .observe(start_dragging_obj_observer)
+        .observe(stop_dragging_obj_observer)
+        .id();
 
     commands.spawn(LineBetween {
         start: anchor_entity,
@@ -70,13 +111,33 @@ fn setup(
     });
 }
 
+fn apply_accelerations(
+    mut query: Query<(&Acceleration, &mut Object)>,
+    game_controller: Res<GameController>
+) {
+    if game_controller.pause_physics { return }
+
+    for (force, mut object) in query.iter_mut() {
+        object.velocity += force.value;
+    }
+}
+
+fn apply_velocity(
+    mut query: Query<(&Object, &mut Transform)>,
+    game_controller: Res<GameController>
+) {
+    if game_controller.pause_physics { return }
+
+    for (object, mut transform) in query.iter_mut() {
+        transform.translation += object.velocity.extend(0.) * game_controller.transform_multiplier;
+    }
+}
 
 fn update(
-    mut obj_pos_query: Query<&mut Transform, With<Object>>
+    mut obj_pos_query: Query<&mut Transform, With<Object>>,
+    game_controller: Res<GameController>
 ) {
-    for mut obj_pos in obj_pos_query.iter_mut() {
-        obj_pos.translation.x += 0.1;
-    }
+
 }
 
 
@@ -98,12 +159,50 @@ fn draw_lines(
 }
 
 
+fn obj_click_down_observer(
+    click: Trigger<Pointer<Down>>,
+    mut game_controller: ResMut<GameController>
+) {
+    if click.button == PointerButton::Primary {
+        game_controller.pause_physics = true
+    }
+}
+
+fn obj_click_up_observer(
+    click: Trigger<Pointer<Up>>,
+    mut game_controller: ResMut<GameController>
+) {
+    if click.button == PointerButton::Primary {
+        game_controller.pause_physics = false
+    }
+}
+
 fn drag_obj_observer(
     drag: Trigger<Pointer<Drag>>,
-    mut transform_query: Query<&mut Transform>
+    mut transform_query: Query<&mut Transform, With<Object>>
 ) {
-    let Ok(mut transform) = transform_query.get_mut(drag.entity()) else { return };
+    if drag.button == PointerButton::Primary {
+        let Ok(mut transform) = transform_query.get_mut(drag.entity()) else { return };
 
-    transform.translation.x += drag.delta.x;
-    transform.translation.y -= drag.delta.y;
+        transform.translation.x += drag.delta.x;
+        transform.translation.y -= drag.delta.y;
+    }
+}
+
+fn start_dragging_obj_observer(
+    drag_start: Trigger<Pointer<DragStart>>,
+    mut game_controller: ResMut<GameController>
+) {
+    if drag_start.button == PointerButton::Primary {
+        game_controller.pause_physics = true
+    }
+}
+
+fn stop_dragging_obj_observer(
+    drag_stop: Trigger<Pointer<DragEnd>>,
+    mut game_controller: ResMut<GameController>
+) {
+    if drag_stop.button == PointerButton::Primary {
+        game_controller.pause_physics = false
+    }
 }
